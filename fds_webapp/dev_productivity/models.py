@@ -428,3 +428,126 @@ class ActivityLog(models.Model):
     
     def __str__(self):
         return f"{self.user.email}: {self.get_action_display()} at {self.created_at}"
+
+
+# ===================== A/B Experiment Models =====================
+
+class ABExperiment(models.Model):
+    """Stores an A/B experiment comparing a Control group vs a GenAI group."""
+
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('running', 'Running'),
+        ('completed', 'Completed'),
+        ('failed', 'Failed'),
+    ]
+
+    name = models.CharField(max_length=200, help_text="Descriptive experiment label")
+    description = models.TextField(blank=True, help_text="Optional notes about this experiment")
+    # User is optional — experiment is public/unauthenticated
+    user = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name='ab_experiments'
+    )
+
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(default=timezone.now)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.TextField(blank=True, null=True)
+
+    # Uploaded CSV file paths (absolute paths on disk under MEDIA_ROOT)
+    control_csv_path = models.CharField(max_length=500, blank=True)
+    genai_csv_path = models.CharField(max_length=500, blank=True)
+
+    # ── Control group aggregate statistics ──
+    control_total_commits = models.IntegerField(null=True, blank=True)
+    control_developer_count = models.IntegerField(null=True, blank=True)
+    control_mean_fds = models.FloatField(null=True, blank=True)
+    # Raw speed: mean of dt_prev_commit_sec across all commits (seconds). Lower = faster.
+    control_mean_speed_sec = models.FloatField(
+        null=True, blank=True,
+        help_text="Mean time between commits in seconds — lower means faster"
+    )
+    # Raw scale: mean total effective churn per developer. Higher = more code.
+    control_mean_churn = models.FloatField(
+        null=True, blank=True,
+        help_text="Mean total lines changed per developer"
+    )
+
+    # ── GenAI group aggregate statistics ──
+    genai_total_commits = models.IntegerField(null=True, blank=True)
+    genai_developer_count = models.IntegerField(null=True, blank=True)
+    genai_mean_fds = models.FloatField(null=True, blank=True)
+    genai_mean_speed_sec = models.FloatField(null=True, blank=True)
+    genai_mean_churn = models.FloatField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "A/B Experiment"
+        verbose_name_plural = "A/B Experiments"
+
+    def __str__(self):
+        return f"A/B Experiment: {self.name} ({self.status})"
+
+    def get_speed_delta_pct(self):
+        """Percentage reduction in time-between-commits (positive = GenAI is faster)."""
+        ctrl = self.control_mean_speed_sec
+        gnai = self.genai_mean_speed_sec
+        if ctrl and gnai and ctrl > 0:
+            return round(((ctrl - gnai) / ctrl) * 100, 1)
+        return None
+
+    def get_churn_delta_pct(self):
+        """Percentage increase in churn (positive = GenAI produces more code)."""
+        ctrl = self.control_mean_churn
+        gnai = self.genai_mean_churn
+        if ctrl and gnai and ctrl > 0:
+            return round(((gnai - ctrl) / ctrl) * 100, 1)
+        return None
+
+    def get_fds_delta_pct(self):
+        """Percentage increase in mean FDS score."""
+        ctrl = self.control_mean_fds
+        gnai = self.genai_mean_fds
+        if ctrl and gnai and ctrl > 0:
+            return round(((gnai - ctrl) / ctrl) * 100, 1)
+        return None
+
+
+class ABDeveloperScore(models.Model):
+    """Per-developer FDS scores for one group within an A/B experiment."""
+
+    GROUP_CHOICES = [
+        ('control', 'Control (No AI)'),
+        ('genai', 'GenAI (GitHub Copilot)'),
+    ]
+
+    experiment = models.ForeignKey(
+        ABExperiment, on_delete=models.CASCADE, related_name='developer_scores'
+    )
+    group = models.CharField(max_length=10, choices=GROUP_CHOICES)
+
+    author_email = models.CharField(max_length=254)
+    fds_score = models.FloatField(default=0.0)
+    avg_effort = models.FloatField(default=0.0)
+    avg_importance = models.FloatField(default=0.0)
+    total_commits = models.IntegerField(default=0)
+    # Raw total effective churn for this developer (insertions + deletions, noise-weighted)
+    total_churn = models.FloatField(default=0.0)
+    # Mean dt_prev_commit_sec for this developer — hypothesis metric #1
+    mean_speed_sec = models.FloatField(
+        default=0.0, help_text="Mean seconds between commits — lower is faster"
+    )
+    # Z-score dimensions stored for radar chart
+    speed_z_mean = models.FloatField(default=0.0)
+    scale_z_mean = models.FloatField(default=0.0)
+    reach_z_mean = models.FloatField(default=0.0)
+    centrality_z_mean = models.FloatField(default=0.0)
+    dominance_z_mean = models.FloatField(default=0.0)
+    novelty_z_mean = models.FloatField(default=0.0)
+
+    class Meta:
+        ordering = ['group', '-fds_score']
+        unique_together = ['experiment', 'group', 'author_email']
+
+    def __str__(self):
+        return f"{self.group}: {self.author_email} — FDS {self.fds_score:.2f}"

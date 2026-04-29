@@ -1,0 +1,505 @@
+{% extends 'dev_productivity/base.html' %}
+{% block title %}A/B Dashboard — {{ experiment.name }}{% endblock %}
+
+{% block content %}
+<style>
+/* ── Brand tokens ── */
+:root {
+  --ctrl: #3b82f6;      /* Control group — blue */
+  --ctrl-bg: rgba(59,130,246,.08);
+  --genai: #8b5cf6;     /* GenAI group — violet */
+  --genai-bg: rgba(139,92,246,.08);
+  --positive: #10b981;
+  --negative: #ef4444;
+}
+
+/* ── Loading overlay ── */
+#loadingOverlay { position:fixed; inset:0; background:rgba(15,23,42,.85); z-index:9999;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; color:#fff; gap:1rem; }
+#loadingOverlay .spinner-border { width:3rem; height:3rem; border-width:.3rem; }
+#errorBox { display:none; }
+
+/* ── KPI Cards ── */
+.kpi-card { border-radius:16px; border:none; overflow:hidden; transition:transform .2s; }
+.kpi-card:hover { transform:translateY(-3px); }
+.kpi-delta { font-size:1rem; font-weight:700; }
+.kpi-delta.positive { color:var(--positive); }
+.kpi-delta.negative { color:var(--negative); }
+
+/* ── Group labels ── */
+.g-ctrl { color:var(--ctrl); }
+.g-genai { color:var(--genai); }
+.badge-ctrl { background:#dbeafe; color:#1d4ed8; }
+.badge-genai { background:#ede9fe; color:#6d28d9; }
+.group-badge { display:inline-flex; align-items:center; gap:.3rem; padding:.25rem .75rem;
+  border-radius:999px; font-size:.75rem; font-weight:700; }
+
+/* ── Hypothesis banner ── */
+.finding-banner { border-radius:16px; border-left:5px solid var(--positive);
+  background:linear-gradient(135deg,#ecfdf5,#f0fdf4); }
+
+/* ── Developer tables ── */
+.dev-table-wrap { max-height:340px; overflow-y:auto; }
+.dev-table td, .dev-table th { vertical-align:middle; white-space:nowrap; }
+.dev-table tbody tr:hover { background:rgba(79,70,229,.04); }
+
+/* ── Chart card ── */
+.chart-card { border-radius:16px; border:1px solid #e2e8f0; box-shadow:0 2px 12px rgba(15,23,42,.05); }
+.chart-card .card-header { background:transparent; border-bottom:1px solid #f1f5f9; font-weight:600; padding:1rem 1.25rem; }
+</style>
+
+<!-- Loading overlay -->
+<div id="loadingOverlay">
+  <div class="spinner-border text-light" role="status"></div>
+  <div id="loadingMsg" class="fw-semibold fs-5">Running FDS analysis pipeline…</div>
+  <div class="text-muted small" id="loadingStatus">This usually takes 20–60 seconds.</div>
+</div>
+
+<!-- Error box (shown only on failure) -->
+<div class="alert alert-danger mt-3" id="errorBox" role="alert">
+  <strong>Analysis failed:</strong> <span id="errorMsg"></span>
+</div>
+
+<!-- ── Main dashboard (hidden until data loads) ── -->
+<div id="mainDash" style="display:none;">
+
+  <!-- Page header -->
+  <div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+    <div>
+      <div class="d-inline-flex align-items-center gap-2 px-3 py-1 rounded-pill mb-2"
+           style="background:linear-gradient(135deg,#ede9fe,#dbeafe); font-size:.78rem; font-weight:600; color:#4f46e5;">
+        ⚗️ A/B Experiment Result
+      </div>
+      <h1 class="fw-bold mb-1" id="expTitle" style="font-size:1.6rem; letter-spacing:-.4px;"></h1>
+      <div class="d-flex gap-2">
+        <span class="group-badge badge-ctrl">📋 Control — No AI</span>
+        <span class="group-badge badge-genai">🤖 GenAI — GitHub Copilot</span>
+      </div>
+    </div>
+    <a href="{% url 'create_ab_experiment' %}" class="btn btn-outline-primary btn-sm">
+      + New Experiment
+    </a>
+  </div>
+
+  <!-- ── Hypothesis Finding Banner ── -->
+  <div class="finding-banner p-4 mb-4">
+    <div class="d-flex align-items-start gap-3">
+      <span style="font-size:2rem;">🔬</span>
+      <div>
+        <div class="fw-bold mb-1" style="font-size:1.05rem;">Key Finding</div>
+        <div id="findingText" class="text-muted">Loading…</div>
+        <div class="small text-muted mt-1">
+          Based on FDS pipeline metrics: raw <code>dt_prev_commit_sec</code> (Speed) and
+          effective churn/developer (Scale). Independent samples design.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── KPI Row 1 — Headline deltas ── -->
+  <div class="row g-3 mb-4">
+    <!-- Speed delta -->
+    <div class="col-md-4">
+      <div class="kpi-card card shadow-sm h-100 p-3"
+           style="background:linear-gradient(135deg,#eff6ff,#dbeafe);">
+        <div class="small text-muted fw-semibold text-uppercase" style="font-size:.7rem; letter-spacing:.5px;">
+          ⚡ Speed — Commit Interval
+        </div>
+        <div class="fs-1 fw-bold kpi-delta" id="kpiSpeedDelta">—</div>
+        <div class="small text-muted">reduction in mean time-between-commits</div>
+        <div class="row mt-3 text-center">
+          <div class="col-6">
+            <div class="small fw-bold g-ctrl" id="kpiCtrlSpeed">—</div>
+            <div class="text-muted" style="font-size:.7rem;">Control (sec)</div>
+          </div>
+          <div class="col-6">
+            <div class="small fw-bold g-genai" id="kpiGnaiSpeed">—</div>
+            <div class="text-muted" style="font-size:.7rem;">GenAI (sec)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scale delta -->
+    <div class="col-md-4">
+      <div class="kpi-card card shadow-sm h-100 p-3"
+           style="background:linear-gradient(135deg,#f5f3ff,#ede9fe);">
+        <div class="small text-muted fw-semibold text-uppercase" style="font-size:.7rem; letter-spacing:.5px;">
+          📊 Scale — Lines of Code
+        </div>
+        <div class="fs-1 fw-bold kpi-delta" id="kpiChurnDelta">—</div>
+        <div class="small text-muted">increase in mean total churn/developer</div>
+        <div class="row mt-3 text-center">
+          <div class="col-6">
+            <div class="small fw-bold g-ctrl" id="kpiCtrlChurn">—</div>
+            <div class="text-muted" style="font-size:.7rem;">Control (lines)</div>
+          </div>
+          <div class="col-6">
+            <div class="small fw-bold g-genai" id="kpiGnaiChurn">—</div>
+            <div class="text-muted" style="font-size:.7rem;">GenAI (lines)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FDS score delta -->
+    <div class="col-md-4">
+      <div class="kpi-card card shadow-sm h-100 p-3"
+           style="background:linear-gradient(135deg,#ecfdf5,#d1fae5);">
+        <div class="small text-muted fw-semibold text-uppercase" style="font-size:.7rem; letter-spacing:.5px;">
+          🏆 Mean FDS Score
+        </div>
+        <div class="fs-1 fw-bold kpi-delta" id="kpiFdsDelta">—</div>
+        <div class="small text-muted">change in mean Fair Developer Score</div>
+        <div class="row mt-3 text-center">
+          <div class="col-6">
+            <div class="small fw-bold g-ctrl" id="kpiCtrlFds">—</div>
+            <div class="text-muted" style="font-size:.7rem;">Control</div>
+          </div>
+          <div class="col-6">
+            <div class="small fw-bold g-genai" id="kpiGnaiFds">—</div>
+            <div class="text-muted" style="font-size:.7rem;">GenAI</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── KPI Row 2 — Group volume stats ── -->
+  <div class="row g-3 mb-4">
+    {% for label, id_prefix, badge_class in "Control Group,ctrl,badge-ctrl|GenAI Group,gnai,badge-genai"|split:"|" %}
+    {% endfor %}
+    <div class="col-md-3">
+      <div class="card border-0 shadow-sm p-3">
+        <div class="small text-muted">Control Commits</div>
+        <div class="fs-4 fw-bold g-ctrl" id="kpiCtrlCommits">—</div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card border-0 shadow-sm p-3">
+        <div class="small text-muted">Control Developers</div>
+        <div class="fs-4 fw-bold g-ctrl" id="kpiCtrlDevs">—</div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card border-0 shadow-sm p-3">
+        <div class="small text-muted">GenAI Commits</div>
+        <div class="fs-4 fw-bold g-genai" id="kpiGnaiCommits">—</div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="card border-0 shadow-sm p-3">
+        <div class="small text-muted">GenAI Developers</div>
+        <div class="fs-4 fw-bold g-genai" id="kpiGnaiDevs">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Charts Row 1 — Speed & Scale side-by-side grouped bars ── -->
+  <div class="row g-4 mb-4">
+    <div class="col-lg-6">
+      <div class="chart-card card">
+        <div class="card-header">
+          ⚡ H1 — Speed: Mean Time Between Commits
+          <div class="text-muted small fw-normal">Lower seconds = faster delivery</div>
+        </div>
+        <div class="card-body"><canvas id="chartSpeed" height="220"></canvas></div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="chart-card card">
+        <div class="card-header">
+          📊 H2 — Scale: Mean Total Churn per Developer
+          <div class="text-muted small fw-normal">Higher lines = more functional code produced</div>
+        </div>
+        <div class="card-body"><canvas id="chartChurn" height="220"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Charts Row 2 — FDS dimensions radar + FDS distribution ── -->
+  <div class="row g-4 mb-4">
+    <div class="col-lg-5">
+      <div class="chart-card card">
+        <div class="card-header">🕸️ FDS Dimensions Radar (Group Averages)</div>
+        <div class="card-body d-flex align-items-center justify-content-center">
+          <canvas id="chartRadar" style="max-height:300px;"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-7">
+      <div class="chart-card card">
+        <div class="card-header">🏆 FDS Score Distribution (Top 10 per Group)</div>
+        <div class="card-body"><canvas id="chartFDSDist" height="220"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Charts Row 3 — Scatter plot ── -->
+  <div class="row g-4 mb-4">
+    <div class="col-12">
+      <div class="chart-card card">
+        <div class="card-header">
+          🔵🟣 Speed vs Scale Scatter — Individual Developers
+          <div class="text-muted small fw-normal">
+            X-axis = Mean seconds between commits (lower = faster) &nbsp;|&nbsp;
+            Y-axis = Total churn / lines (higher = more code)
+          </div>
+        </div>
+        <div class="card-body"><canvas id="chartScatter" height="140"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Developer Tables ── -->
+  <div class="row g-4 mb-5">
+    <div class="col-lg-6">
+      <div class="chart-card card">
+        <div class="card-header">
+          <span class="group-badge badge-ctrl me-2">📋 Control</span> Developer Scores
+        </div>
+        <div class="card-body p-0 dev-table-wrap">
+          <table class="table table-sm dev-table mb-0">
+            <thead class="table-light sticky-top">
+              <tr>
+                <th>Developer</th>
+                <th class="text-end">FDS</th>
+                <th class="text-end">Speed (s)</th>
+                <th class="text-end">Churn</th>
+                <th class="text-end">Commits</th>
+              </tr>
+            </thead>
+            <tbody id="ctrlTable"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="chart-card card">
+        <div class="card-header">
+          <span class="group-badge badge-genai me-2">🤖 GenAI</span> Developer Scores
+        </div>
+        <div class="card-body p-0 dev-table-wrap">
+          <table class="table table-sm dev-table mb-0">
+            <thead class="table-light sticky-top">
+              <tr>
+                <th>Developer</th>
+                <th class="text-end">FDS</th>
+                <th class="text-end">Speed (s)</th>
+                <th class="text-end">Churn</th>
+                <th class="text-end">Commits</th>
+              </tr>
+            </thead>
+            <tbody id="genaiTable"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /mainDash -->
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const EXPERIMENT_ID = {{ experiment.id }};
+const DATA_URL = "{% url 'ab_experiment_data' experiment.id %}";
+const STATUS_URL = "{% url 'ab_experiment_status' experiment.id %}";
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const el = id => document.getElementById(id);
+const fmt = (v, d=1) => (v == null ? '—' : (+v).toFixed(d));
+const fmtPct = v => v >= 0 ? `+${v}%` : `${v}%`;
+const fmtSec = s => s >= 3600 ? `${(s/3600).toFixed(1)}h` : s >= 60 ? `${(s/60).toFixed(1)}min` : `${fmt(s)}s`;
+
+function setKPI(id, val, suffix='', isPositiveGood=true) {
+  const el_ = el(id);
+  if (!el_) return;
+  el_.textContent = val + suffix;
+  const v = parseFloat(val);
+  if (!isNaN(v)) {
+    el_.classList.remove('positive','negative');
+    el_.classList.add(isPositiveGood ? (v >= 0 ? 'positive' : 'negative') : (v <= 0 ? 'positive' : 'negative'));
+  }
+}
+
+// ── Chart refs ───────────────────────────────────────────────────────────────
+const charts = {};
+function makeChart(id, type, data, opts) {
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(el(id).getContext('2d'), { type, data, options: opts || {} });
+}
+
+const CHART_DEFAULTS = {
+  responsive: true, maintainAspectRatio: true,
+  plugins: { legend: { labels: { font: { family:'Inter,system-ui' }, boxWidth:12 } } },
+};
+
+// ── Poll until completed ──────────────────────────────────────────────────────
+async function pollStatus() {
+  while (true) {
+    const res = await fetch(STATUS_URL);
+    const d = await res.json();
+    if (d.status === 'completed') break;
+    if (d.status === 'failed') {
+      el('loadingOverlay').style.display = 'none';
+      el('errorBox').style.display = 'block';
+      el('errorMsg').textContent = d.error || 'Unknown error';
+      return false;
+    }
+    el('loadingMsg').textContent =
+      d.status === 'running' ? 'Running FDS analysis pipeline…' : 'Queued — starting shortly…';
+    await new Promise(r => setTimeout(r, 2500));
+  }
+  return true;
+}
+
+// ── Render dashboard ──────────────────────────────────────────────────────────
+function renderDash(d) {
+  const s = d.summary;
+
+  // Title
+  el('expTitle').textContent = d.name;
+
+  // KPI Headline deltas
+  const speedDelta = s.speedDeltaPct;
+  const churnDelta = s.churnDeltaPct;
+  const fdsDelta   = s.fdsDeltaPct;
+
+  // Speed: positive = GenAI is faster (less time between commits) = good
+  setKPI('kpiSpeedDelta', fmtPct(speedDelta), '', true);
+  el('kpiCtrlSpeed').textContent = fmtSec(s.control.meanSpeedSec);
+  el('kpiGnaiSpeed').textContent = fmtSec(s.genai.meanSpeedSec);
+
+  // Churn: positive = GenAI produces more code = good
+  setKPI('kpiChurnDelta', fmtPct(churnDelta), '', true);
+  el('kpiCtrlChurn').textContent = fmt(s.control.meanChurn, 0);
+  el('kpiGnaiChurn').textContent = fmt(s.genai.meanChurn, 0);
+
+  // FDS
+  setKPI('kpiFdsDelta', fmtPct(fdsDelta), '', true);
+  el('kpiCtrlFds').textContent  = fmt(s.control.meanFds, 2);
+  el('kpiGnaiFds').textContent  = fmt(s.genai.meanFds, 2);
+
+  // Volume stats
+  el('kpiCtrlCommits').textContent = s.control.totalCommits;
+  el('kpiCtrlDevs').textContent    = s.control.developerCount;
+  el('kpiGnaiCommits').textContent = s.genai.totalCommits;
+  el('kpiGnaiDevs').textContent    = s.genai.developerCount;
+
+  // Hypothesis finding text
+  const speedAdj = speedDelta > 0 ? `${Math.abs(speedDelta)}% faster` : `${Math.abs(speedDelta)}% slower`;
+  const churnAdj = churnDelta > 0 ? `${Math.abs(churnDelta)}% more code` : `${Math.abs(churnDelta)}% less code`;
+  el('findingText').innerHTML =
+    `The GenAI group committed <strong>${speedAdj}</strong> (lower mean time-between-commits: ` +
+    `${fmtSec(s.genai.meanSpeedSec)} vs ${fmtSec(s.control.meanSpeedSec)}) and produced ` +
+    `<strong>${churnAdj}</strong> per developer (${fmt(s.genai.meanChurn,0)} vs ${fmt(s.control.meanChurn,0)} lines). ` +
+    `Mean FDS score changed by <strong>${fmtPct(fdsDelta)}</strong>.`;
+
+  // ── Chart 1 — Speed ──────────────────────────────────────────────────────
+  makeChart('chartSpeed', 'bar', {
+    labels: ['Control (No AI)', 'GenAI (Copilot)'],
+    datasets: [{
+      label: 'Mean seconds between commits',
+      data: [s.control.meanSpeedSec, s.genai.meanSpeedSec],
+      backgroundColor: ['rgba(59,130,246,.7)', 'rgba(139,92,246,.7)'],
+      borderColor: ['#3b82f6','#8b5cf6'],
+      borderWidth: 2, borderRadius: 8,
+    }]
+  }, { ...CHART_DEFAULTS, scales: { y: { beginAtZero: true, title: { display:true, text:'Seconds' } } },
+    plugins: { ...CHART_DEFAULTS.plugins, legend:{ display:false },
+      tooltip:{ callbacks:{ label: ctx => ` ${fmtSec(ctx.raw)}` } } } });
+
+  // ── Chart 2 — Scale ──────────────────────────────────────────────────────
+  makeChart('chartChurn', 'bar', {
+    labels: ['Control (No AI)', 'GenAI (Copilot)'],
+    datasets: [{
+      label: 'Mean total churn / developer',
+      data: [s.control.meanChurn, s.genai.meanChurn],
+      backgroundColor: ['rgba(59,130,246,.7)', 'rgba(139,92,246,.7)'],
+      borderColor: ['#3b82f6','#8b5cf6'],
+      borderWidth: 2, borderRadius: 8,
+    }]
+  }, { ...CHART_DEFAULTS, scales: { y: { beginAtZero: true, title: { display:true, text:'Lines changed (effective)' } } },
+    plugins: { ...CHART_DEFAULTS.plugins, legend:{ display:false } } });
+
+  // ── Chart 3 — Radar ──────────────────────────────────────────────────────
+  const radarLabels = ['Speed','Scale','Reach','Centrality','Dominance','Novelty'];
+  makeChart('chartRadar', 'radar', {
+    labels: radarLabels,
+    datasets: [
+      { label:'Control', data: d.radarControl, fill:true,
+        backgroundColor:'rgba(59,130,246,.15)', borderColor:'#3b82f6', pointBackgroundColor:'#3b82f6' },
+      { label:'GenAI', data: d.radarGenai, fill:true,
+        backgroundColor:'rgba(139,92,246,.15)', borderColor:'#8b5cf6', pointBackgroundColor:'#8b5cf6' },
+    ]
+  }, { ...CHART_DEFAULTS, scales:{ r:{ beginAtZero:false,
+    pointLabels:{ font:{ size:11, family:'Inter,system-ui' } } } } });
+
+  // ── Chart 4 — FDS Distribution bar ──────────────────────────────────────
+  const top10Ctrl  = d.controlDevelopers.slice(0,10);
+  const top10Gnai  = d.genaiDevelopers.slice(0,10);
+  const allNames   = [...new Set([...top10Ctrl.map(x=>x.name), ...top10Gnai.map(x=>x.name)])];
+  const ctrlMap    = Object.fromEntries(top10Ctrl.map(x=>[x.name,x.fds]));
+  const genaiMap   = Object.fromEntries(top10Gnai.map(x=>[x.name,x.fds]));
+  makeChart('chartFDSDist', 'bar', {
+    labels: allNames,
+    datasets: [
+      { label:'Control FDS', data: allNames.map(n=>ctrlMap[n]??null),
+        backgroundColor:'rgba(59,130,246,.7)', borderRadius:6, borderSkipped:false },
+      { label:'GenAI FDS',   data: allNames.map(n=>genaiMap[n]??null),
+        backgroundColor:'rgba(139,92,246,.7)', borderRadius:6, borderSkipped:false },
+    ]
+  }, { ...CHART_DEFAULTS, scales:{ y:{ beginAtZero:true, title:{ display:true, text:'FDS Score' } } } });
+
+  // ── Chart 5 — Scatter ────────────────────────────────────────────────────
+  makeChart('chartScatter', 'scatter', {
+    datasets: [
+      { label:'Control', data: d.controlDevelopers.map(x=>({ x:x.meanSpeedSec, y:x.totalChurn, name:x.name })),
+        backgroundColor:'rgba(59,130,246,.7)', pointRadius:7, pointHoverRadius:10 },
+      { label:'GenAI',   data: d.genaiDevelopers.map(x=>({ x:x.meanSpeedSec, y:x.totalChurn, name:x.name })),
+        backgroundColor:'rgba(139,92,246,.7)', pointRadius:7, pointHoverRadius:10 },
+    ]
+  }, { ...CHART_DEFAULTS,
+    scales:{
+      x:{ title:{ display:true, text:'Mean seconds between commits (lower = faster)' }, beginAtZero:true },
+      y:{ title:{ display:true, text:'Total churn / lines (higher = more code)' }, beginAtZero:true },
+    },
+    plugins: { ...CHART_DEFAULTS.plugins,
+      tooltip:{ callbacks:{ label: ctx => ` ${ctx.raw.name}: ${fmtSec(ctx.raw.x)}, ${fmt(ctx.raw.y,0)} lines` } }
+    }
+  });
+
+  // ── Tables ────────────────────────────────────────────────────────────────
+  function renderTable(tbodyId, devs, color) {
+    const tbody = el(tbodyId);
+    if (!devs.length) { tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No data</td></tr>'; return; }
+    tbody.innerHTML = devs.map((d,i) => `
+      <tr>
+        <td><span class="fw-semibold" style="color:${color}">${d.name}</span>
+          <div class="text-muted" style="font-size:.7rem;">${d.email}</div></td>
+        <td class="text-end fw-bold">${fmt(d.fds,2)}</td>
+        <td class="text-end">${fmtSec(d.meanSpeedSec)}</td>
+        <td class="text-end">${fmt(d.totalChurn,0)}</td>
+        <td class="text-end">${d.commitCount}</td>
+      </tr>`).join('');
+  }
+  renderTable('ctrlTable',  d.controlDevelopers, '#3b82f6');
+  renderTable('genaiTable', d.genaiDevelopers,   '#8b5cf6');
+}
+
+// ── Bootstrap ─────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', async () => {
+  const ok = await pollStatus();
+  if (!ok) return;
+
+  const res  = await fetch(DATA_URL);
+  const data = await res.json();
+
+  el('loadingOverlay').style.display = 'none';
+  el('mainDash').style.display = 'block';
+
+  renderDash(data);
+});
+</script>
+{% endblock %}

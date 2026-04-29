@@ -540,3 +540,87 @@ class FDSAnalysisAdvancedForm(forms.ModelForm):
                 self.fields['parameter_set'].initial = default_params
             except FDSParameterSet.DoesNotExist:
                 pass
+
+
+class ABExperimentForm(forms.Form):
+    """
+    Public upload form for the A/B experiment feature.
+    No authentication required — designed for research demo use.
+
+    Expected CSV schema (both files):
+        hash, author_name, author_email, commit_ts_utc, dt_prev_commit_sec,
+        files_changed, insertions, deletions, is_merge, dirs_touched,
+        file_types, msg_subject, batch_id
+    """
+
+    name = forms.CharField(
+        max_length=200,
+        widget=forms.TextInput(attrs={
+            'class': 'form-control',
+            'id': 'id_experiment_name',
+            'placeholder': 'e.g., Sprint 23 — GitHub Copilot vs Control Study',
+        }),
+        help_text="A short, descriptive label for this experiment run"
+    )
+
+    description = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={
+            'class': 'form-control',
+            'id': 'id_experiment_description',
+            'rows': 2,
+            'placeholder': 'Optional: team size, sprint duration, project context…',
+        }),
+        help_text="Optional notes (not published)"
+    )
+
+    control_csv = forms.FileField(
+        label="Control Group CSV  (No AI)",
+        widget=forms.FileInput(attrs={
+            'class': 'form-control',
+            'id': 'id_control_csv',
+            'accept': '.csv',
+        }),
+        help_text="Commit data for developers working without AI assistance"
+    )
+
+    genai_csv = forms.FileField(
+        label="GenAI Group CSV  (GitHub Copilot)",
+        widget=forms.FileInput(attrs={
+            'class': 'form-control',
+            'id': 'id_genai_csv',
+            'accept': '.csv',
+        }),
+        help_text="Commit data for developers using GitHub Copilot"
+    )
+
+    def _validate_csv(self, field_name):
+        f = self.cleaned_data.get(field_name)
+        if f:
+            if not f.name.lower().endswith('.csv'):
+                raise ValidationError("Only CSV files (.csv) are accepted.")
+            if f.size == 0:
+                raise ValidationError("The uploaded file is empty.")
+            # Basic header check — read first line only
+            try:
+                first_line = f.read(512).decode('utf-8', errors='ignore')
+                f.seek(0)
+                required_cols = {'hash', 'author_email', 'commit_ts_utc', 'batch_id'}
+                header_cols = {c.strip().lower() for c in first_line.split('\n')[0].split(',')}
+                missing = required_cols - header_cols
+                if missing:
+                    raise ValidationError(
+                        f"CSV is missing required columns: {', '.join(sorted(missing))}. "
+                        "Please use the standard schema."
+                    )
+            except ValidationError:
+                raise
+            except Exception:
+                pass  # Non-fatal — let DataProcessor surface any further errors
+        return f
+
+    def clean_control_csv(self):
+        return self._validate_csv('control_csv')
+
+    def clean_genai_csv(self):
+        return self._validate_csv('genai_csv')

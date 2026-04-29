@@ -8,8 +8,8 @@ from django.utils import timezone
 from django.core.paginator import Paginator
 from django.db import models
 from django.core.exceptions import PermissionDenied
-from .models import FDSAnalysis, DeveloperScore, BatchMetrics, User, FDSParameterSet
-from .forms import FDSAnalysisForm, AnalysisSharingForm, FDSParameterForm
+from .models import FDSAnalysis, DeveloperScore, BatchMetrics, User, FDSParameterSet, ABExperiment, ABDeveloperScore
+from .forms import FDSAnalysisForm, AnalysisSharingForm, FDSParameterForm, ABExperimentForm
 from .services import FDSAnalysisService
 from .utils import log_user_activity, get_user_preferences
 import json
@@ -850,3 +850,149 @@ def parameter_presets_api(request):
     }
     
     return JsonResponse(presets)
+
+
+# ===================== A/B Experiment Views (Public — no auth required) =====================
+
+def create_ab_experiment(request):
+    """Upload two CSVs and start an A/B experiment — no login needed."""
+    if request.method == 'POST':
+        form = ABExperimentForm(request.POST, request.FILES)
+        if form.is_valid():
+            import uuid
+            from django.conf import settings as django_settings
+            from .ab_service import ABExperimentService
+
+            upload_dir = Path(django_settings.MEDIA_ROOT) / 'ab_experiments'
+            upload_dir.mkdir(parents=True, exist_ok=True)
+
+            uid = str(uuid.uuid4())[:8]
+            control_file = request.FILES['control_csv']
+            genai_file = request.FILES['genai_csv']
+
+            control_path = upload_dir / f'control_{uid}.csv'
+            genai_path = upload_dir / f'genai_{uid}.csv'
+
+            with open(control_path, 'wb') as fh:
+                for chunk in control_file.chunks():
+                    fh.write(chunk)
+            with open(genai_path, 'wb') as fh:
+                for chunk in genai_file.chunks():
+                    fh.write(chunk)
+
+            user = request.user if request.user.is_authenticated else None
+            experiment = ABExperiment.objects.create(
+                name=form.cleaned_data['name'],
+                description=form.cleaned_data.get('description', ''),
+                user=user,
+                control_csv_path=str(control_path),
+                genai_csv_path=str(genai_path),
+            )
+
+            ABExperimentService().start_experiment(experiment.id)
+            return redirect('ab_experiment_detail', experiment_id=experiment.id)
+    else:
+        form = ABExperimentForm()
+
+    return render(request, 'dev_productivity/create_ab_experiment.html', {'form': form})
+
+
+def ab_experiment_detail(request, experiment_id):
+    """Render the A/B comparison dashboard shell (data populated by JS fetch)."""
+    experiment = get_object_or_404(ABExperiment, id=experiment_id)
+    return render(request, 'dev_productivity/ab_dashboard.html', {'experiment': experiment})
+
+
+@require_GET
+def ab_experiment_data(request, experiment_id):
+    """JSON API — returns all comparison data for the A/B dashboard."""
+    experiment = get_object_or_404(ABExperiment, id=experiment_id)
+
+    if experiment.status != 'completed':
+        return JsonResponse({
+            'status': experiment.status,
+            'error': experiment.error_message or '',
+        })
+
+    def _dev_list(group_label):
+        rows = list(experiment.developer_scores.filter(group=group_label).values())
+        result = []
+        for r in rows:
+            email = r.get('author_email', '') or ''
+            name_part = (email.split('@')[0] or 'dev').replace('.', ' ').title()
+            result.append({
+                'name': name_part,
+                'email': email,
+                'fds': round(float(r.get('fds_score') or 0), 2),
+                'totalChurn': round(float(r.get('total_churn') or 0), 1),
+                'commitCount': int(r.get('total_commits') or 0),
+                'meanSpeedSec': round(float(r.get('mean_speed_sec') or 0), 1),
+                'speedZ': round(float(r.get('speed_z_mean') or 0), 3),
+                'scaleZ': round(float(r.get('scale_z_mean') or 0), 3),
+                'reachZ': round(float(r.get('reach_z_mean') or 0), 3),
+                'centralityZ': round(float(r.get('centrality_z_mean') or 0), 3),
+                'dominanceZ': round(float(r.get('dominance_z_mean') or 0), 3),
+                'noveltyZ': round(float(r.get('novelty_z_mean') or 0), 3),
+            })
+        result.sort(key=lambda x: x['fds'], reverse=True)
+        return result
+
+    def _safe(v):
+        return round(float(v or 0), 2)
+
+    ctrl_speed = _safe(experiment.control_mean_speed_sec)
+    gnai_speed = _safe(experiment.genai_mean_speed_sec)
+    ctrl_churn = _safe(experiment.control_mean_churn)
+    gnai_churn = _safe(experiment.genai_mean_churn)
+    ctrl_fds = _safe(experiment.control_mean_fds)
+    gnai_fds = _safe(experiment.genai_mean_fds)
+
+    speed_delta_pct = round(((ctrl_speed - gnai_speed) / ctrl_speed) * 100, 1) if ctrl_speed > 0 else 0
+    churn_delta_pct = round(((gnai_churn - ctrl_churn) / ctrl_churn) * 100, 1) if ctrl_churn > 0 else 0
+    fds_delta_pct = round(((gnai_fds - ctrl_fds) / ctrl_fds) * 100, 1) if ctrl_fds > 0 else 0
+
+    def _radar_avg(group_label):
+        devs = list(experiment.developer_scores.filter(group=group_label).values(
+            'speed_z_mean', 'scale_z_mean', 'reach_z_mean',
+            'centrality_z_mean', 'dominance_z_mean', 'novelty_z_mean'
+        ))
+        if not devs:
+            return [0, 0, 0, 0, 0, 0]
+        fields = ['speed_z_mean', 'scale_z_mean', 'reach_z_mean',
+                  'centrality_z_mean', 'dominance_z_mean', 'novelty_z_mean']
+        return [round(sum(d[f] or 0 for d in devs) / len(devs), 3) for f in fields]
+
+    payload = {
+        'status': experiment.status,
+        'name': experiment.name,
+        'summary': {
+            'control': {
+                'totalCommits': experiment.control_total_commits or 0,
+                'developerCount': experiment.control_developer_count or 0,
+                'meanFds': ctrl_fds,
+                'meanSpeedSec': ctrl_speed,
+                'meanChurn': ctrl_churn,
+            },
+            'genai': {
+                'totalCommits': experiment.genai_total_commits or 0,
+                'developerCount': experiment.genai_developer_count or 0,
+                'meanFds': gnai_fds,
+                'meanSpeedSec': gnai_speed,
+                'meanChurn': gnai_churn,
+            },
+            'speedDeltaPct': speed_delta_pct,
+            'churnDeltaPct': churn_delta_pct,
+            'fdsDeltaPct': fds_delta_pct,
+        },
+        'radarControl': _radar_avg('control'),
+        'radarGenai': _radar_avg('genai'),
+        'controlDevelopers': _dev_list('control'),
+        'genaiDevelopers': _dev_list('genai'),
+    }
+    return JsonResponse(payload)
+
+
+def ab_experiment_status(request, experiment_id):
+    """Lightweight status-poll endpoint used by the loading screen."""
+    experiment = get_object_or_404(ABExperiment, id=experiment_id)
+    return JsonResponse({'status': experiment.status, 'error': experiment.error_message or ''})

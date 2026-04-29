@@ -1,0 +1,199 @@
+{% extends 'dev_productivity/base.html' %}
+{% block title %}New A/B Experiment — GenAI Impact & Productivity Analyzer{% endblock %}
+{% block content %}
+
+<style>
+  .upload-zone {
+    border: 2px dashed #cbd5e1;
+    border-radius: 16px;
+    padding: 2.5rem 1.5rem;
+    text-align: center;
+    transition: border-color .25s, background .25s;
+    cursor: pointer;
+    position: relative;
+  }
+  .upload-zone:hover, .upload-zone.drag-over { border-color: var(--brand-primary); background: rgba(79,70,229,.04); }
+  .upload-zone .zone-icon { font-size: 2.8rem; margin-bottom: .75rem; display: block; }
+  .upload-zone input[type=file] { position:absolute; inset:0; opacity:0; cursor:pointer; width:100%; }
+  .upload-zone .filename { margin-top:.5rem; font-size:.85rem; color:#4f46e5; font-weight:600; min-height:1.2rem; }
+  .ctrl-zone { border-color:#3b82f6; background:rgba(59,130,246,.03); }
+  .ctrl-zone .zone-icon { filter: hue-rotate(0deg); }
+  .genai-zone { border-color:#8b5cf6; background:rgba(139,92,246,.03); }
+  .group-badge { display:inline-flex; align-items:center; gap:.4rem; padding:.3rem .9rem; border-radius:999px; font-size:.8rem; font-weight:700; letter-spacing:.3px; }
+  .badge-ctrl { background:#dbeafe; color:#1d4ed8; }
+  .badge-genai { background:#ede9fe; color:#6d28d9; }
+  .schema-pill { display:inline-block; background:#f1f5f9; color:#475569; border-radius:6px; padding:.15rem .5rem; font-size:.72rem; font-family:monospace; margin:.15rem; }
+  .step-dot { width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:.8rem; flex-shrink:0; }
+</style>
+
+<div class="row justify-content-center">
+  <div class="col-lg-9 col-xl-8">
+
+    <!-- Hero header -->
+    <div class="text-center mb-5 mt-2">
+      <div class="d-inline-flex align-items-center gap-2 px-3 py-1 rounded-pill mb-3"
+           style="background:linear-gradient(135deg,#ede9fe,#dbeafe); font-size:.8rem; font-weight:600; color:#4f46e5;">
+        ⚗️ IEEE Research Tool
+      </div>
+      <h1 class="fw-bold mb-2" style="font-size:2rem; letter-spacing:-.5px;">
+        New A/B Productivity Experiment
+      </h1>
+      <p class="text-muted" style="max-width:560px; margin:0 auto;">
+        Upload two Git commit CSVs — one for each group — and the FDS pipeline will compute
+        <strong>Speed</strong> and <strong>Scale</strong> metrics automatically.
+      </p>
+    </div>
+
+    <!-- Form card -->
+    <div class="card shadow-sm border-0" style="border-radius:20px; overflow:hidden;">
+      <div style="height:4px; background:linear-gradient(90deg,#3b82f6,#8b5cf6,#06b6d4);"></div>
+      <div class="card-body p-4 p-lg-5">
+        <form method="post" enctype="multipart/form-data" id="abForm" novalidate>
+          {% csrf_token %}
+
+          <!-- Step 1 — Name -->
+          <div class="d-flex align-items-start gap-3 mb-4">
+            <div class="step-dot" style="background:#ede9fe; color:#6d28d9;">1</div>
+            <div class="flex-grow-1">
+              <label for="id_experiment_name" class="form-label fw-semibold mb-1">Experiment Name</label>
+              {{ form.name }}
+              {% if form.name.errors %}<div class="text-danger small mt-1">{{ form.name.errors }}</div>{% endif %}
+              <div class="text-muted small mt-1">{{ form.name.help_text }}</div>
+            </div>
+          </div>
+
+          <!-- Step 2 — Description (optional) -->
+          <div class="d-flex align-items-start gap-3 mb-4">
+            <div class="step-dot" style="background:#f0fdf4; color:#15803d;">2</div>
+            <div class="flex-grow-1">
+              <label for="id_experiment_description" class="form-label fw-semibold mb-1">
+                Notes <span class="text-muted fw-normal">(optional)</span>
+              </label>
+              {{ form.description }}
+            </div>
+          </div>
+
+          <!-- Step 3 — CSV Uploads -->
+          <div class="d-flex align-items-start gap-3 mb-2">
+            <div class="step-dot" style="background:#eff6ff; color:#1d4ed8;">3</div>
+            <div class="fw-semibold">Upload CSV Files</div>
+          </div>
+
+          <div class="row g-4 mb-3 ps-5">
+            <!-- Control CSV -->
+            <div class="col-md-6">
+              <div class="upload-zone ctrl-zone" id="ctrlZone">
+                <input type="file" name="control_csv" id="id_control_csv" accept=".csv"
+                       onchange="showFilename(this,'ctrlName')">
+                <span class="zone-icon">📋</span>
+                <div class="fw-semibold mb-1">Control Group</div>
+                <span class="group-badge badge-ctrl">🙅 No AI</span>
+                <div class="text-muted small mt-2">Drag &amp; drop or click to browse</div>
+                <div class="filename" id="ctrlName">No file chosen</div>
+              </div>
+              {% if form.control_csv.errors %}
+                <div class="text-danger small mt-1">{{ form.control_csv.errors }}</div>
+              {% endif %}
+            </div>
+
+            <!-- GenAI CSV -->
+            <div class="col-md-6">
+              <div class="upload-zone genai-zone" id="genaiZone">
+                <input type="file" name="genai_csv" id="id_genai_csv" accept=".csv"
+                       onchange="showFilename(this,'genaiName')">
+                <span class="zone-icon">🤖</span>
+                <div class="fw-semibold mb-1">GenAI Group</div>
+                <span class="group-badge badge-genai">✅ GitHub Copilot</span>
+                <div class="text-muted small mt-2">Drag &amp; drop or click to browse</div>
+                <div class="filename" id="genaiName">No file chosen</div>
+              </div>
+              {% if form.genai_csv.errors %}
+                <div class="text-danger small mt-1">{{ form.genai_csv.errors }}</div>
+              {% endif %}
+            </div>
+          </div>
+
+          <!-- Expected schema info -->
+          <div class="ps-5 mb-4">
+            <div class="p-3 rounded-3" style="background:#f8fafc; border:1px solid #e2e8f0;">
+              <div class="small fw-semibold text-muted mb-2">📌 Required CSV columns</div>
+              <div>
+                {% for col in "hash,author_name,author_email,commit_ts_utc,dt_prev_commit_sec,files_changed,insertions,deletions,is_merge,dirs_touched,file_types,msg_subject,batch_id"|split:"," %}
+                  <span class="schema-pill">{{ col }}</span>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+
+          <!-- Submit -->
+          <div class="text-center">
+            <button type="submit" id="submitBtn" class="btn btn-primary px-5 py-2 fw-semibold"
+                    style="border-radius:12px; font-size:1rem; background:linear-gradient(135deg,#4f46e5,#7c3aed); border:none; box-shadow:0 4px 20px rgba(79,70,229,.35);">
+              <span id="btnText">⚗️ Run A/B Analysis</span>
+              <span id="btnSpinner" class="spinner-border spinner-border-sm ms-2 d-none" role="status"></span>
+            </button>
+            <div class="text-muted small mt-2">
+              Analysis runs in the background — usually completes in under 60 seconds.
+            </div>
+          </div>
+
+        </form>
+      </div>
+    </div>
+
+    <!-- How it works -->
+    <div class="mt-5">
+      <h6 class="fw-bold text-muted text-uppercase small mb-3">How it works</h6>
+      <div class="row g-3">
+        {% for step in "1. Upload CSVs|FDS pipeline runs TORQUE clustering + 6-dimension effort scoring on each group independently.,2. Processing|Speed (Δ dt_prev_commit_sec) and Scale (Δ effective churn) are compared across groups.,3. Dashboard|A side-by-side dashboard shows hypothesis-aligned results with charts ready for your paper."|split:"|" %}
+        {% endfor %}
+        <div class="col-md-4">
+          <div class="p-3 rounded-3 h-100" style="background:#f8fafc; border:1px solid #e2e8f0;">
+            <div class="fw-semibold small mb-1">① Upload CSVs</div>
+            <div class="text-muted small">Two pre-clustered CSVs — one per group.</div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="p-3 rounded-3 h-100" style="background:#f8fafc; border:1px solid #e2e8f0;">
+            <div class="fw-semibold small mb-1">② FDS Pipeline</div>
+            <div class="text-muted small">Full 4-step scoring runs independently on each group.</div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="p-3 rounded-3 h-100" style="background:#f8fafc; border:1px solid #e2e8f0;">
+            <div class="fw-semibold small mb-1">③ Comparison Dashboard</div>
+            <div class="text-muted small">Speed &amp; Scale deltas displayed with paper-ready charts.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function showFilename(input, spanId) {
+  const span = document.getElementById(spanId);
+  span.textContent = input.files.length ? input.files[0].name : 'No file chosen';
+}
+
+// Drag-and-drop highlight
+['ctrlZone','genaiZone'].forEach(id => {
+  const zone = document.getElementById(id);
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('drag-over'); });
+});
+
+// Loading state on submit
+document.getElementById('abForm').addEventListener('submit', function() {
+  const btn = document.getElementById('submitBtn');
+  document.getElementById('btnText').textContent = 'Submitting…';
+  document.getElementById('btnSpinner').classList.remove('d-none');
+  btn.disabled = true;
+});
+</script>
+{% endblock %}
