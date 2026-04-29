@@ -78,15 +78,10 @@ class ABExperimentService:
 
         Returns a dict of DataFrames and computed stats.
         """
-        # Add the app's module folder to sys.path so FDS sub-packages are importable
-        app_dir = str(Path(__file__).parent)
-        if app_dir not in sys.path:
-            sys.path.insert(0, app_dir)
-
-        from fds_algorithm.preprocessing.data_processor import DataProcessor
-        from fds_algorithm.effort_calculator.developer_effort import DeveloperEffortCalculator
-        from fds_algorithm.importance_calculator.batch_importance import BatchImportanceCalculator
-        from fds_algorithm.fds_calculator import FDSCalculator
+        from .fds_algorithm.preprocessing.data_processor import DataProcessor
+        from .fds_algorithm.effort_calculator.developer_effort import DeveloperEffortCalculator
+        from .fds_algorithm.importance_calculator.batch_importance import BatchImportanceCalculator
+        from .fds_algorithm.fds_calculator import FDSCalculator
 
         config = {
             'noise_factor_threshold': 0.1,

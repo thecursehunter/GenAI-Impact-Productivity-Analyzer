@@ -235,13 +235,11 @@ class FDSAnalysisService:
     
     def _run_fds_analysis(self, clustered_csv, temp_path, raw_commits_path=None, clustering_summary_path=None):
         """Run FDS analysis on clustered commits and persist intermediates in temp_path."""
-        # Import FDS modules
-        sys.path.append(str(Path(__file__).parent))
-        
-        from fds_algorithm.preprocessing.data_processor import DataProcessor
-        from fds_algorithm.effort_calculator.developer_effort import DeveloperEffortCalculator
-        from fds_algorithm.importance_calculator.batch_importance import BatchImportanceCalculator
-        from fds_algorithm.fds_calculator import FDSCalculator
+        # Import FDS modules using relative imports
+        from .fds_algorithm.preprocessing.data_processor import DataProcessor
+        from .fds_algorithm.effort_calculator.developer_effort import DeveloperEffortCalculator
+        from .fds_algorithm.importance_calculator.batch_importance import BatchImportanceCalculator
+        from .fds_algorithm.fds_calculator import FDSCalculator
         
         # Configuration
         config = {

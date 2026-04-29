@@ -1,61 +1,77 @@
-# 🚀 FDS Web Application - Production Deployment Guide
+# 🚀 GenAI Impact & Productivity Analyzer — Deployment Guide
 
-This guide provides step-by-step instructions for deploying the Fair Developer Score (FDS) Web Application on an Ubuntu server using Django, uWSGI, Nginx, and PostgreSQL.
+This guide covers deploying GIPA on an Ubuntu server using Django, uWSGI, Nginx, and either SQLite (dev) or PostgreSQL (production).
+
+> **For research demo purposes**, the local development server (`runserver`) is perfectly sufficient — see [Local Setup in README.md](README.md#-local-setup).
+
+---
 
 ## 📋 Prerequisites
 
 - Ubuntu 20.04+ server with sudo privileges
 - Domain name pointing to your server (optional but recommended)
 - At least 2GB RAM and 20GB storage
+- Python 3.10+
 - Basic knowledge of Linux command line
 
-## 🛠️ Quick Deployment (Automated)
+---
 
-### Option 1: Automated Deployment Script
+## 🛠️ Quick Start (Local Development)
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/BellowAverage/ProgrammerProductivityMeasurement.git
-   cd ProgrammerProductivityMeasurement/fds_webapp
-   ```
+```bash
+# Clone the repository
+git clone https://github.com/BellowAverage/ProgrammerProductivityMeasurement.git
+cd "ProgrammerProductivityMeasurement"
 
-2. **Run the deployment script:**
-   ```bash
-   chmod +x deploy.sh
-   ./deploy.sh
-   ```
+# Create and activate virtual environment
+python -m venv .venv
+.venv\Scripts\activate          # Windows
+# source .venv/bin/activate     # macOS/Linux
 
-3. **Follow the prompts and complete the post-deployment steps below.**
+# Install dependencies
+pip install -r requirements.txt
 
-## 🔧 Manual Deployment (Step-by-Step)
+# Apply migrations (includes A/B experiment tables)
+cd fds_webapp
+python manage.py migrate
+
+# Create the static directory (avoids W004 warning)
+mkdir -p static
+
+# Start development server
+python manage.py runserver
+```
+
+App available at: **http://127.0.0.1:8000**
+A/B Experiment: **http://127.0.0.1:8000/ab-experiment/new/**
+
+---
+
+## 🔧 Production Deployment (Ubuntu Server)
 
 ### Step 1: System Setup
 
 ```bash
-# Update system
 sudo apt update && sudo apt upgrade -y
-
-# Install system dependencies
 sudo apt install -y python3 python3-pip python3-venv python3-dev \
-    postgresql postgresql-contrib nginx redis-server \
-    git curl wget unzip supervisor \
+    postgresql postgresql-contrib nginx \
+    git curl wget unzip \
     build-essential libpq-dev libssl-dev libffi-dev \
     certbot python3-certbot-nginx
 ```
 
-### Step 2: Database Setup
+### Step 2: Database Setup (PostgreSQL)
 
 ```bash
-# Switch to postgres user and create database
 sudo -u postgres psql
 
-# In PostgreSQL shell:
-CREATE DATABASE fds_webapp;
-CREATE USER fds_user WITH PASSWORD 'your_secure_password_here';
-ALTER ROLE fds_user SET client_encoding TO 'utf8';
-ALTER ROLE fds_user SET default_transaction_isolation TO 'read committed';
-ALTER ROLE fds_user SET timezone TO 'UTC';
-GRANT ALL PRIVILEGES ON DATABASE fds_webapp TO fds_user;
+-- In PostgreSQL shell:
+CREATE DATABASE gipa_db;
+CREATE USER gipa_user WITH PASSWORD 'your_secure_password_here';
+ALTER ROLE gipa_user SET client_encoding TO 'utf8';
+ALTER ROLE gipa_user SET default_transaction_isolation TO 'read committed';
+ALTER ROLE gipa_user SET timezone TO 'UTC';
+GRANT ALL PRIVILEGES ON DATABASE gipa_db TO gipa_user;
 \q
 ```
 
@@ -63,303 +79,272 @@ GRANT ALL PRIVILEGES ON DATABASE fds_webapp TO fds_user;
 
 ```bash
 # Create project directory
-sudo mkdir -p /var/www/fds_webapp
-sudo chown $USER:$USER /var/www/fds_webapp
+sudo mkdir -p /var/www/gipa
+sudo chown $USER:$USER /var/www/gipa
 
 # Clone repository
-git clone https://github.com/BellowAverage/ProgrammerProductivityMeasurement.git /var/www/fds_webapp
-cd /var/www/fds_webapp/fds_webapp
+git clone https://github.com/BellowAverage/ProgrammerProductivityMeasurement.git /var/www/gipa
+cd /var/www/gipa/fds_webapp
 
 # Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 
-# Install Python dependencies
+# Install dependencies
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
 ### Step 4: Environment Configuration
 
-```bash
-# Copy environment template
-cp env.example .env
+Create a `.env` file inside `fds_webapp/fds_webapp/`:
 
-# Edit environment variables
-nano .env
-```
-
-**Required .env configuration:**
 ```env
-SECRET_KEY=your-super-secret-django-key-here-generate-a-new-one
+SECRET_KEY=your-super-secret-django-key-replace-this
 DEBUG=False
 ALLOWED_HOSTS=your-domain.com,www.your-domain.com,your-server-ip
 
-DB_NAME=fds_webapp
-DB_USER=fds_user
+# Database (switch from SQLite to PostgreSQL for production)
+DB_ENGINE=django.db.backends.postgresql
+DB_NAME=gipa_db
+DB_USER=gipa_user
 DB_PASSWORD=your_secure_password_here
 DB_HOST=localhost
 DB_PORT=5432
 
+# Email (optional — used for user registration verification)
 EMAIL_HOST=smtp.gmail.com
 EMAIL_PORT=587
 EMAIL_USE_TLS=True
 EMAIL_HOST_USER=your-email@gmail.com
 EMAIL_HOST_PASSWORD=your-app-password
 DEFAULT_FROM_EMAIL=noreply@your-domain.com
-
-REDIS_URL=redis://127.0.0.1:6379/1
 ```
+
+> **Note:** The current `settings.py` uses SQLite by default. For production, update the `DATABASES` dictionary in `settings.py` to use the PostgreSQL credentials above.
 
 ### Step 5: Django Setup
 
 ```bash
-# Run migrations
-python manage.py migrate --settings=fds_webapp.settings_production
+# Apply all migrations (includes ABExperiment and ABDeveloperScore tables)
+python manage.py migrate
 
-# Create superuser
-python manage.py createsuperuser --settings=fds_webapp.settings_production
+# Create an admin superuser
+python manage.py createsuperuser
 
 # Collect static files
-python manage.py collectstatic --noinput --settings=fds_webapp.settings_production
+python manage.py collectstatic --noinput
 
-# Create example data
-python manage.py create_example_analyses --settings=fds_webapp.settings_production
-python manage.py create_parameter_presets --settings=fds_webapp.settings_production
-
-# Create logs directory
-mkdir -p logs
-sudo mkdir -p /var/log/uwsgi
-sudo chown www-data:www-data /var/log/uwsgi
+# Create the media directory for uploaded CSVs
+mkdir -p media/ab_experiments
 ```
 
 ### Step 6: uWSGI Configuration
 
+Create `/var/www/gipa/uwsgi.ini`:
+
+```ini
+[uwsgi]
+project = gipa
+base = /var/www/gipa
+
+chdir = %(base)/fds_webapp
+module = fds_webapp.wsgi:application
+
+master = true
+processes = 4
+threads = 2
+
+socket = %(base)/gipa.sock
+chmod-socket = 660
+vacuum = true
+
+die-on-term = true
+
+logto = /var/log/uwsgi/gipa.log
+```
+
 ```bash
-# Test uWSGI
-uwsgi --ini uwsgi.ini
-
 # Install systemd service
-sudo cp fds_webapp.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable fds_webapp
-sudo systemctl start fds_webapp
+sudo nano /etc/systemd/system/gipa.service
+```
 
-# Check status
-sudo systemctl status fds_webapp
+Paste:
+
+```ini
+[Unit]
+Description=GenAI Impact & Productivity Analyzer (GIPA) uWSGI
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/gipa/fds_webapp
+Environment="PATH=/var/www/gipa/.venv/bin"
+ExecStart=/var/www/gipa/.venv/bin/uwsgi --ini /var/www/gipa/uwsgi.ini
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable gipa
+sudo systemctl start gipa
+sudo systemctl status gipa
 ```
 
 ### Step 7: Nginx Configuration
 
 ```bash
-# Copy Nginx configuration
-sudo cp nginx_fds_webapp.conf /etc/nginx/sites-available/fds_webapp
+sudo nano /etc/nginx/sites-available/gipa
+```
 
-# Update domain name in the configuration
-sudo nano /etc/nginx/sites-available/fds_webapp
-# Replace 'your-domain.com' with your actual domain
+Paste:
 
-# Enable site
-sudo ln -sf /etc/nginx/sites-available/fds_webapp /etc/nginx/sites-enabled/
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com www.your-domain.com;
 
-# Remove default site (optional)
-sudo rm -f /etc/nginx/sites-enabled/default
+    location = /favicon.ico { access_log off; log_not_found off; }
 
-# Test configuration
+    location /static/ {
+        root /var/www/gipa/fds_webapp;
+    }
+
+    location /media/ {
+        root /var/www/gipa/fds_webapp;
+    }
+
+    location / {
+        include uwsgi_params;
+        uwsgi_pass unix:/var/www/gipa/gipa.sock;
+    }
+
+    # Increase upload size limit for CSV files
+    client_max_body_size 50M;
+}
+```
+
+```bash
+sudo ln -sf /etc/nginx/sites-available/gipa /etc/nginx/sites-enabled/
 sudo nginx -t
-
-# Restart Nginx
 sudo systemctl restart nginx
 ```
 
 ### Step 8: SSL Certificate (Let's Encrypt)
 
 ```bash
-# Install SSL certificate
 sudo certbot --nginx -d your-domain.com -d www.your-domain.com
-
-# Test automatic renewal
 sudo certbot renew --dry-run
 ```
 
-### Step 9: Firewall Setup
+### Step 9: File Permissions
 
 ```bash
-# Configure UFW firewall
-sudo ufw allow 'Nginx Full'
-sudo ufw allow ssh
-sudo ufw --force enable
-
-# Check status
-sudo ufw status
+sudo chown -R www-data:www-data /var/www/gipa
+sudo chmod -R 755 /var/www/gipa
+sudo chmod -R 775 /var/www/gipa/fds_webapp/media
+sudo mkdir -p /var/log/uwsgi
+sudo chown www-data:www-data /var/log/uwsgi
 ```
 
-### Step 10: File Permissions
-
-```bash
-# Set proper permissions
-sudo chown -R www-data:www-data /var/www/fds_webapp
-sudo chmod -R 755 /var/www/fds_webapp
-sudo chmod -R 775 /var/www/fds_webapp/fds_webapp/media
-sudo chmod -R 775 /var/www/fds_webapp/fds_webapp/logs
-```
+---
 
 ## 🔍 Post-Deployment Verification
 
-### Check Services Status
-
 ```bash
 # Check all services
-sudo systemctl status fds_webapp
+sudo systemctl status gipa
 sudo systemctl status nginx
 sudo systemctl status postgresql
-sudo systemctl status redis-server
 
-# Check logs
-sudo tail -f /var/log/uwsgi/fds_webapp.log
-sudo tail -f /var/log/nginx/fds_webapp_error.log
+# Check application log
+sudo tail -f /var/log/uwsgi/gipa.log
+sudo tail -f /var/log/nginx/error.log
 ```
 
-### Test Application
+**Test these URLs after deployment:**
 
-1. **Visit your domain:** `https://your-domain.com`
-2. **Admin panel:** `https://your-domain.com/admin/`
-3. **Register a test user:** `https://your-domain.com/auth/register/`
-4. **Run an analysis:** Create and test an FDS analysis
+| URL | Expected Result |
+|-----|----------------|
+| `https://your-domain.com/` | Home page loads |
+| `https://your-domain.com/ab-experiment/new/` | A/B upload form (no login needed) |
+| `https://your-domain.com/analyses/` | Public analyses list |
+| `https://your-domain.com/admin/` | Django admin panel |
 
-## 🔧 Maintenance Commands
+---
+
+## 🔧 Maintenance
 
 ### Update Application
 
 ```bash
-cd /var/www/fds_webapp
+cd /var/www/gipa
 git pull origin main
 cd fds_webapp
-source venv/bin/activate
+source ../.venv/bin/activate
 pip install -r requirements.txt
-python manage.py migrate --settings=fds_webapp.settings_production
-python manage.py collectstatic --noinput --settings=fds_webapp.settings_production
-sudo systemctl restart fds_webapp
+python manage.py migrate        # picks up any new model changes
+python manage.py collectstatic --noinput
+sudo systemctl restart gipa
 ```
 
-### Backup Database
+### Important: New Database Tables (A/B Feature)
+
+The A/B experiment feature added two new tables via migration `0004_add_abexperiment`. If updating an existing deployment, always run:
 
 ```bash
-# Create backup
-sudo -u postgres pg_dump fds_webapp > fds_webapp_backup_$(date +%Y%m%d_%H%M%S).sql
-
-# Restore backup
-sudo -u postgres psql fds_webapp < fds_webapp_backup_YYYYMMDD_HHMMSS.sql
+python manage.py migrate dev_productivity
 ```
 
-### Monitor Logs
+This creates:
+- `dev_productivity_abexperiment` — experiment metadata and group aggregate stats
+- `dev_productivity_abdeveloperscore` — per-developer scores per group
+
+### Backup
 
 ```bash
-# Application logs
-sudo tail -f /var/log/uwsgi/fds_webapp.log
+# SQLite (development)
+cp fds_webapp/db.sqlite3 backups/db_$(date +%Y%m%d_%H%M%S).sqlite3
 
-# Nginx logs
-sudo tail -f /var/log/nginx/fds_webapp_access.log
-sudo tail -f /var/log/nginx/fds_webapp_error.log
-
-# System logs
-sudo journalctl -u fds_webapp -f
+# PostgreSQL (production)
+sudo -u postgres pg_dump gipa_db > backups/gipa_$(date +%Y%m%d_%H%M%S).sql
 ```
+
+---
 
 ## 🚨 Troubleshooting
 
-### Common Issues
+| Problem | Fix |
+|---------|-----|
+| `502 Bad Gateway` | `sudo systemctl status gipa` — check uWSGI is running |
+| Static files not loading | `python manage.py collectstatic` then restart Nginx |
+| `staticfiles.W004` warning | `mkdir -p fds_webapp/static` |
+| A/B experiment stuck at "running" | Check `gipa.log` for Python traceback in background thread |
+| CSV upload fails validation | Verify CSV has all 13 required columns (see README schema) |
+| `fds_algorithm` import errors | Ensure you are running from inside `fds_webapp/` with the venv active |
 
-1. **502 Bad Gateway:**
-   - Check uWSGI service: `sudo systemctl status fds_webapp`
-   - Check socket permissions: `ls -la /var/www/fds_webapp/fds_webapp.sock`
-
-2. **Static files not loading:**
-   - Run: `python manage.py collectstatic --settings=fds_webapp.settings_production`
-   - Check Nginx configuration for static file paths
-
-3. **Database connection errors:**
-   - Verify PostgreSQL is running: `sudo systemctl status postgresql`
-   - Check database credentials in `.env` file
-
-4. **Permission denied errors:**
-   - Reset permissions: `sudo chown -R www-data:www-data /var/www/fds_webapp`
-
-### Performance Optimization
-
-1. **Enable Redis caching:**
-   ```bash
-   sudo systemctl enable redis-server
-   sudo systemctl start redis-server
-   ```
-
-2. **Optimize uWSGI workers:**
-   - Edit `uwsgi.ini` and adjust `processes` based on CPU cores
-   - Monitor memory usage and adjust `reload-on-rss`
-
-3. **Database optimization:**
-   ```sql
-   -- Connect to PostgreSQL and run:
-   ANALYZE;
-   VACUUM;
-   ```
-
-## 📊 Monitoring and Alerts
-
-### Set up log rotation
-
-```bash
-sudo nano /etc/logrotate.d/fds_webapp
-```
-
-Add:
-```
-/var/log/uwsgi/fds_webapp.log {
-    daily
-    missingok
-    rotate 52
-    compress
-    delaycompress
-    notifempty
-    create 644 www-data www-data
-    postrotate
-        systemctl reload fds_webapp
-    endscript
-}
-```
+---
 
 ## 🔐 Security Checklist
 
-- [ ] Changed default SECRET_KEY
-- [ ] Set DEBUG=False
-- [ ] Configured proper ALLOWED_HOSTS
-- [ ] Set up SSL certificate
-- [ ] Enabled firewall (UFW)
+- [ ] Replaced default `SECRET_KEY` in settings
+- [ ] Set `DEBUG=False` in production
+- [ ] Configured `ALLOWED_HOSTS` to your domain only
+- [ ] Set up SSL/TLS via Let's Encrypt
+- [ ] Enabled UFW firewall (`ufw allow 'Nginx Full'`)
 - [ ] Set strong database passwords
-- [ ] Configured secure session cookies
-- [ ] Set up regular backups
-- [ ] Monitor logs for suspicious activity
+- [ ] `media/ab_experiments/` is not publicly browseable (Nginx serves only declared paths)
+- [ ] Regular database backups scheduled
 
-## 📞 Support
+---
 
-If you encounter issues during deployment:
+## ✅ Deployment Success Checklist
 
-1. Check the troubleshooting section above
-2. Review application logs
-3. Verify all configuration files
-4. Ensure all services are running
-5. Check firewall and network settings
-
-## 🎉 Success!
-
-Your FDS Web Application should now be running at:
-- **Main site:** `https://your-domain.com`
-- **Admin panel:** `https://your-domain.com/admin/`
-
-The application includes:
-- ✅ User registration and authentication
-- ✅ GitHub repository analysis
-- ✅ Fair Developer Score calculations
-- ✅ Interactive dashboards and visualizations
-- ✅ Parameter configuration system
-- ✅ Example analyses for demonstration
+- [ ] `https://your-domain.com/` — Home page renders
+- [ ] `https://your-domain.com/ab-experiment/new/` — Upload form renders without login
+- [ ] Upload two test CSVs → experiment completes and dashboard renders
+- [ ] Speed Δ% and Churn Δ% are non-zero on the dashboard
+- [ ] `https://your-domain.com/admin/` — Admin panel accessible

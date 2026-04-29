@@ -118,9 +118,19 @@
             <div class="p-3 rounded-3" style="background:#f8fafc; border:1px solid #e2e8f0;">
               <div class="small fw-semibold text-muted mb-2">📌 Required CSV columns</div>
               <div>
-                {% for col in "hash,author_name,author_email,commit_ts_utc,dt_prev_commit_sec,files_changed,insertions,deletions,is_merge,dirs_touched,file_types,msg_subject,batch_id"|split:"," %}
-                  <span class="schema-pill">{{ col }}</span>
-                {% endfor %}
+                <span class="schema-pill">hash</span>
+                <span class="schema-pill">author_name</span>
+                <span class="schema-pill">author_email</span>
+                <span class="schema-pill">commit_ts_utc</span>
+                <span class="schema-pill">dt_prev_commit_sec</span>
+                <span class="schema-pill">files_changed</span>
+                <span class="schema-pill">insertions</span>
+                <span class="schema-pill">deletions</span>
+                <span class="schema-pill">is_merge</span>
+                <span class="schema-pill">dirs_touched</span>
+                <span class="schema-pill">file_types</span>
+                <span class="schema-pill">msg_subject</span>
+                <span class="schema-pill">batch_id</span>
               </div>
             </div>
           </div>
@@ -145,8 +155,6 @@
     <div class="mt-5">
       <h6 class="fw-bold text-muted text-uppercase small mb-3">How it works</h6>
       <div class="row g-3">
-        {% for step in "1. Upload CSVs|FDS pipeline runs TORQUE clustering + 6-dimension effort scoring on each group independently.,2. Processing|Speed (Δ dt_prev_commit_sec) and Scale (Δ effective churn) are compared across groups.,3. Dashboard|A side-by-side dashboard shows hypothesis-aligned results with charts ready for your paper."|split:"|" %}
-        {% endfor %}
         <div class="col-md-4">
           <div class="p-3 rounded-3 h-100" style="background:#f8fafc; border:1px solid #e2e8f0;">
             <div class="fw-semibold small mb-1">① Upload CSVs</div>

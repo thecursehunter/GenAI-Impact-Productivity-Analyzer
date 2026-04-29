@@ -1,274 +1,241 @@
-# Fair Developer Score (FDS) — An Explainable Productivity Metric for Git Repos
+# GenAI Impact & Productivity Analyzer (GIPA)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
+[![Django](https://img.shields.io/badge/Django-5.2-green)](https://www.djangoproject.com/)
 
-> A principled, auditable alternative to "commit-count" metrics.
-> FDS quantifies a developer's impact as **Effort × Build Importance**, using only repository data and robust statistics.
-
----
-
-## 🚀 Why this project
-
-Large organizations still lean on simplistic signals (commit counts, raw LOC). Those are easy to game and ignore context. FDS separates **how much a developer contributed** from **how much that work mattered** by first grouping commits into **builds** (logical working units) and then scoring each developer–build pair with transparent math.
-
-Video Walkthrough: https://youtu.be/pn11I-acq8w
+> A research-grade A/B testing tool for measuring the impact of Generative AI (GitHub Copilot) on software developer productivity.
+> Built on the **Fair Developer Score (FDS)** algorithm — quantifying developer output as **Effort × Build Importance** using only Git commit data.
 
 ---
 
-## 💡 Core idea
+## 🎯 Research Purpose
 
-We first **cluster commits into builds** (the smallest unit of value we measure), then score:
+This tool was developed to support an **IEEE academic paper** investigating whether Generative AI assistance (GitHub Copilot) meaningfully changes developer productivity. The system accepts two Git commit CSV datasets and performs a full FDS scoring pipeline on each group independently, then compares:
 
-$\text{Contribution}(u, k) = \text{Effort}(u, k) \times \text{Importance}(k)$
-
-$\text{FDS}(u) = \sum_k \text{Contribution}(u, k)$
-
-Here `u` is a developer and `k` is a build. A tiny bug-fix build is not equivalent to a cross-module refactor build; the math reflects that.
+- **H1 — Speed**: Did GenAI reduce mean time-between-commits (`dt_prev_commit_sec`)?
+- **H2 — Scale**: Did GenAI increase total lines of functional code produced (effective churn)?
 
 ---
 
 ## 🎥 Demo
 
-### Web Application Interface
+### Upload Form — Start a New A/B Experiment
 
-![FDS Web Application Demo](Demo1.gif)
+<!-- 📌 PLACEHOLDER: Replace with a screenshot or GIF of /ab-experiment/new/ -->
+![A/B Experiment Upload Form](docs/demo_upload.gif)
 
-*Interactive dashboard showing developer contributions, build analysis, and real-time metrics*
+*Dual CSV upload interface — Control Group (blue) vs GenAI Group (violet)*
 
-### Analysis Results Visualization
+### A/B Comparison Dashboard
 
-![FDS Analysis Results](Demo2.gif)
+<!-- 📌 PLACEHOLDER: Replace with a screenshot or GIF of /ab-experiment/<id>/ after completion -->
+![A/B Comparison Dashboard](docs/demo_dashboard.gif)
 
-*Detailed analysis results with charts, developer rankings, and build importance metrics*
+*Side-by-side Speed & Scale comparison charts, hypothesis finding banner, radar chart, and developer tables*
 
----
+### Single-Repository FDS Dashboard (Original Feature)
 
-## 📊 Data inputs (Git-only)
+<!-- 📌 PLACEHOLDER: Replace with a screenshot or GIF of a completed single analysis dashboard -->
+![FDS Analysis Dashboard](docs/demo_fds.gif)
 
-For each commit:
-
-```
-hash, author_name, author_email,
-commit_ts_utc, insertions, deletions, files_changed,
-dirs_touched (top-level), is_merge, msg_subject
-```
-
-Optional but useful:
-
-```
-file_paths                  # for "new-file" & key-path detection
-dt_prev_author_sec          # recency for Speed
-```
+*Per-developer FDS scores, build timeline, and 6-dimension contribution breakdown*
 
 ---
 
-## ⚙️ Pre-processing
+## 🧪 A/B Experiment Feature (New)
 
-**Noise filtering → effective\_churn**
-Down-weight or drop vendor/generated files, format-only sweeps, pure renames, mass moves.
-`effective_churn = (insertions + deletions) × noise_factor`.
+The core new feature for this research. Navigate to `/ab-experiment/new/` — **no login required**.
 
-**Clustering commits into builds (torque-like)**
-Per author, sort by time. Start a new **build** when:
+### Required CSV Schema (both files must match exactly)
 
 ```
-Δt > TIME_GAP_HOURS  (default 2h)
-OR
-Jaccard(dir_set_curr, dir_set_prev) < JACCARD_MIN  (default 0.30)
+hash, author_name, author_email, commit_ts_utc, dt_prev_commit_sec,
+files_changed, insertions, deletions, is_merge, dirs_touched,
+file_types, msg_subject, batch_id
 ```
 
-**Directory co-change graph & PageRank**
-Nodes = top-level directories; edge weight \$w\_{ij}\$ = co-change frequency.
-Compute PageRank with damping \$\alpha = 0.85\$; store \$C(\text{dir})\$.
+### Workflow
 
-**Robust standardization (MAD-z)**
-For every raw feature (except Share), per **repo × quarter**:
-
-$z = \text{clip}\left(\frac{x - \text{median}}{1.4826 \cdot \text{MAD}}, -3, +3\right)$
+1. Upload `Control_Group.csv` (developers without AI) and `GenAI_Group.csv` (GitHub Copilot users)
+2. The FDS pipeline runs independently on each group in the background (~20–60 seconds)
+3. The comparison dashboard auto-loads with:
+   - **Headline KPI deltas**: Speed Δ%, Churn Δ%, FDS Score Δ%
+   - **Key Finding banner**: auto-generated hypothesis statement
+   - **5 charts**: Speed bar, Scale bar, 6-dimension Radar, FDS distribution, Speed×Scale scatter
+   - **Per-developer tables** for both groups
 
 ---
 
-## 💪 Effort — per developer `u` in build `k`
+## 💡 Algorithm Overview
 
-$$$\text{Effort}(u, k) = \text{Share}(u, k) \cdot \left(
-0.25 \cdot Z_{\text{scale}}(u, k) + 0.15 \cdot Z_{\text{reach}}(u, k) + 0.20 \cdot Z_{\text{central}}(u, k) + 0.20 \cdot Z_{\text{dom}}(u, k) + 0.15 \cdot Z_{\text{novel}}(u, k) + 0.05 \cdot Z_{\text{speed}}(u, k)
-\right)$$
+### Step 1 — TORQUE Clustering
 
-### 🔧 Dimension settings (Effort)
+Commits are clustered into **builds** (logical units of work) using temporal gaps and directory similarity:
 
-* **📊 Share** — *Who owns the build?*
-  ```
-  Share(u, k) = author_effective_churn / build_effective_churn
-  ```
-  Range `[0,1]`. If denominator is 0, set Share=0.
+```
+New build when:
+  Δt > TIME_GAP_HOURS (default 2h)
+  OR Jaccard(dir_set_curr, dir_set_prev) < 0.30
+```
 
-* **📏 Scale** — *How big?*
-  ```
-  raw = log(1 + author_churn_in_build)
-  ```
-  Then MAD-z. `author_churn_in_build = Σ(insertions + deletions) (after noise)`
+> **Note:** For the A/B experiment feature, CSVs already include a `batch_id` column, so this step is skipped.
 
-* **🌐 Reach** — *How wide?* (directory entropy)
-  ```
-  p_i = churn_in_dir_i / total_author_churn
-  ```
-  
-  $$H = -\sum_i p_i \log_2 p_i$$
-  
-  (0 if one directory). Then MAD-z.
+### Step 2 — Developer Effort (per developer `u`, build `k`)
 
-* **🎯 Centrality** — *How core?*
-  ```
-  raw = mean(C(dir))
-  ```
-  over dirs the author touched in the build (recommended: churn-weighted mean). Then MAD-z.
+$$\text{Effort}(u, k) = \text{Share}(u, k) \cdot \left( 0.25 Z_{\text{scale}} + 0.15 Z_{\text{reach}} + 0.20 Z_{\text{central}} + 0.20 Z_{\text{dom}} + 0.15 Z_{\text{novel}} + 0.05 Z_{\text{speed}} \right)$$
 
-* **👑 Dominance** — *Who leads?*
-  
-  ```
-  raw = 0.3 × is_first + 0.3 × is_last + 0.4 × commit_count_share
-  ```
-  
-  Cap to [0,1]. Then MAD-z.
+| Dimension | Meaning |
+|-----------|---------|
+| **Share** | Author's churn / total build churn |
+| **Scale** | log(1 + author churn), MAD-z normalized |
+| **Reach** | Directory entropy (how broadly the author spread work) |
+| **Centrality** | Mean PageRank of directories touched |
+| **Dominance** | First/last committer + commit-count share |
+| **Novelty** | New file lines + key-path lines / total churn |
+| **Speed** | exp(−hours_since_prev / τ), decay-based |
 
-* **✨ Novelty** — *How new?*
-  
-  $$\text{raw} = \frac{\text{new file lines} + \text{key path lines}}{\text{author churn}}$$
-  
-  Cap to ≤ 2.0. Then MAD-z.
-  *(key_path_lines = lines in files under "hot" dirs or high-centrality nodes)*
+### Step 3 — Build Importance (per build `k`)
 
-* **⚡ Speed** — *How fast?* *(optional if recency available)*
-  
-  $$\text{raw} = \exp\left(-\frac{\text{hours since prev author commit}}{\tau_{\text{speed h}}}\right)$$
-  
-  Default τ_speed_h = 24; then MAD-z.
+$$\text{Importance}(k) = 0.30 Z_{\text{scale}} + 0.20 Z_{\text{scope}} + 0.15 Z_{\text{central}} + 0.15 Z_{\text{complex}} + 0.10 Z_{\text{type}} + 0.10 Z_{\text{release}}$$
+
+### Step 4 — Final FDS Score
+
+$$\text{FDS}(u) = \sum_k \text{Effort}(u, k) \times \text{Importance}(k)$$
+
+### Robust Standardization (MAD-z)
+
+All raw features are standardized using Median Absolute Deviation to resist outliers:
+
+$$z = \text{clip}\left(\frac{x - \text{median}}{1.4826 \cdot \text{MAD}},\ -3,\ +3\right)$$
 
 ---
 
-## ⭐ Build Importance — per build `k`
+## 🖥️ Web Application Features
 
-$$\text{Importance}(k) = 0.30 \cdot Z_{\text{scale}}(k) + 0.20 \cdot Z_{\text{scope}}(k) + 0.15 \cdot Z_{\text{central}}(k) + 0.15 \cdot Z_{\text{complex}}(k) + 0.10 \cdot Z_{\text{type}}(k) + 0.10 \cdot Z_{\text{release}}(k)$$
-
-### 🎯 Dimension settings (Importance)
-
-* **📏 Scale** — *How large?*
-  
-  $$\text{raw} = \log(1 + \text{total churn}_k)$$
-  
-  where total_churn_k = Σ effective_churn (all authors); MAD-z.
-
-* **🌍 Scope** — *How broad?*
-  
-  $$\text{raw} = 0.5 \cdot \text{files changed} + 0.3 \cdot H_{\text{dir}} + 0.2 \cdot \text{unique dirs}$$
-  
-  Then MAD-z. H_dir is directory entropy computed over the entire build's churn distribution.
-
-* **🎯 Centrality** — *How core?*
-  ```
-  raw = mean(C(dir))
-  ```
-  over **all** dirs touched in the build (unweighted or churn-weighted); MAD-z.
-
-* **🧩 Complexity** — *How hard?*
-  
-  $$\text{raw} = \sqrt{\text{unique dirs} \times \log(1 + \text{total churn}_k)}$$
-  
-  MAD-z. (Square-root tempers growth while keeping multi-module × large edits higher.)
-
-* **🚨 Type Priority** — *How urgent?*
-  Lightweight message classifier → coefficient; then MAD-z.
-  Default mapping:
-
-  ```
-  🔒 security 1.20  🚑 hotfix 1.15  ✨ feature 1.10  ⚡ perf 1.05
-  🐛 bugfix 1.00    🔧 refactor 0.90  📝 doc 0.60     ❓ other 0.80
-  ```
-
-* **🎯 Release Proximity** — *How late?*
-  
-  $$\text{raw} = \exp\left(-\frac{\text{days to nearest tag or merge}}{\tau_{\text{release d}}}\right)$$
-  
-  Default τ_release_d = 30; MAD-z.
-  (Distance to nearest annotated tag or merge-to-main used as a release proxy.)
+| Feature | URL | Auth Required | Purpose |
+|---------|-----|---------------|---------|
+| **⚗️ A/B Experiment** | `/ab-experiment/new/` | ❌ No | Core research tool — upload two CSVs, compare groups |
+| **📊 FDS Analysis** | `/create-analysis/` | ✅ Yes | Analyze a single GitHub repository via URL |
+| **🌐 Public Analyses** | `/analyses/` | ❌ No | Browse all shared analyses |
+| **⚙️ Parameter Sets** | `/parameters/` | ✅ Yes | Create/tune custom FDS weight configurations |
+| **👤 User Dashboard** | `/dashboard/` | ✅ Yes | View your analyses and activity |
 
 ---
 
-## 🏆 Final scoring
+## 🚀 Local Setup
 
-```
-Contribution_{u,k} = Effort_{u,k} × Importance_k
+### Prerequisites
+
+- Python 3.10+
+- Git
+
+### Installation
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/BellowAverage/ProgrammerProductivityMeasurement.git
+cd "ProgrammerProductivityMeasurement"
+
+# 2. Create and activate a virtual environment
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+
+# macOS / Linux
+source .venv/bin/activate
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Apply database migrations
+cd fds_webapp
+python manage.py migrate
+
+# 5. Run the development server
+python manage.py runserver
 ```
 
-```
-FDS(u) = Σ_k Contribution_{u,k}    (over chosen window, e.g., quarter)
-```
+The app will be available at **http://127.0.0.1:8000**
 
-Effort captures **who lifted how much**; Importance captures **how heavy the build actually is**. Using the same yardsticks (scale, centrality) at two levels prevents "free rides" on critical builds and "thankless marathons" on peripheral ones.
+To access the A/B experiment tool directly: **http://127.0.0.1:8000/ab-experiment/new/**
 
 ---
 
-## 📈 Output artifacts
+## 📁 Project Structure
 
-| File | Description | Content |
-|------|-------------|---------|
-| 🏗️ `build_table.csv` | **Build Analysis** | Per build: each Importance component (raw & z) and final `importance` |
-| 💪 `effort_table.csv` | **Developer Effort** | Per developer–build: Share, each Effort component (raw & z), and final `effort` |
-| 🤝 `contribution_table.csv` | **Contributions** | Per developer–build: `contribution = effort × importance` |
-| 🏆 `fds_table.csv` | **Final Scores** | Per developer: aggregated FDS over the configured time window |
+```
+GenAI Impact & Productivity Analyzer/
+├── fds_webapp/                     # Django web application
+│   ├── dev_productivity/
+│   │   ├── fds_algorithm/          # Core FDS algorithm modules
+│   │   │   ├── preprocessing/      # DataProcessor — noise filtering, PageRank
+│   │   │   ├── effort_calculator/  # DeveloperEffortCalculator
+│   │   │   ├── importance_calculator/ # BatchImportanceCalculator
+│   │   │   └── fds_calculator.py   # FDS aggregation and scoring
+│   │   ├── ab_service.py           # ⭐ A/B experiment background service (NEW)
+│   │   ├── models.py               # Django ORM — incl. ABExperiment, ABDeveloperScore
+│   │   ├── views.py                # URL handlers
+│   │   ├── forms.py                # Upload forms — incl. ABExperimentForm
+│   │   ├── services.py             # Single-repo FDS pipeline
+│   │   └── templates/
+│   │       └── dev_productivity/
+│   │           ├── ab_dashboard.html        # ⭐ A/B comparison dashboard (NEW)
+│   │           ├── create_ab_experiment.html # ⭐ A/B upload form (NEW)
+│   │           ├── base.html                # Shared layout (GIPA rebrand)
+│   │           └── dashboard.html           # Single-repo FDS dashboard
+│   └── fds_webapp/
+│       └── settings.py
+├── modules/                        # Standalone algorithm scripts
+│   ├── fds_algorithm/
+│   └── torque_clustering/
+├── README.md
+├── DEPLOYMENT_GUIDE.md
+├── USER_GUIDE.md                   # ⭐ New user guide for research use
+└── requirements.txt
+```
 
 ---
 
-## 🔧 Configuration knobs (defaults)
+## 📊 Output Artifacts
+
+| File | Description |
+|------|-------------|
+| `build_table.csv` | Per-build Importance components |
+| `effort_table.csv` | Per developer–build Effort components |
+| `contribution_table.csv` | `contribution = effort × importance` |
+| `fds_table.csv` | Final FDS scores per developer |
+
+---
+
+## 🔧 Configuration
+
+Default algorithm weights are tunable via the **Parameter Sets** UI (`/parameters/`):
 
 ```text
-# Clustering
-TIME_GAP_HOURS = 2
-JACCARD_MIN    = 0.30
-
-# Centrality
-ALPHA_PAGERANK = 0.85
-
-# Decays
-TAU_SPEED_H    = 24     # hours
-TAU_RELEASE_D  = 30     # days
-
-# Robust stats
-MAD_CLIP_LOW   = -3
-MAD_CLIP_HIGH  =  3
-STATS_WINDOW   = "repo×quarter"
-
 # Effort weights
-W_SCALE   = 0.25
-W_REACH   = 0.15
-W_CENTRAL = 0.20
-W_DOM     = 0.20
-W_NOVEL   = 0.15
-W_SPEED   = 0.05
+W_SCALE=0.25  W_REACH=0.15  W_CENTRAL=0.20  W_DOM=0.20  W_NOVEL=0.15  W_SPEED=0.05
 
 # Importance weights
-A_SCALE   = 0.30
-A_SCOPE   = 0.20
-A_CENTRAL = 0.15
-A_COMPLEX = 0.15
-A_TYPE    = 0.10
-A_RELEASE = 0.10
-```
+A_SCALE=0.30  A_SCOPE=0.20  A_CENTRAL=0.15  A_COMPLEX=0.15  A_TYPE=0.10  A_RELEASE=0.10
 
-All thresholds/weights are configurable (YAML/JSON/env). Teams can tune them against internal ground truth (e.g., release notes, hot-fix lists).
+# Clustering
+TIME_GAP_HOURS=2   JACCARD_MIN=0.30   ALPHA_PAGERANK=0.85
+```
 
 ---
 
-## 📄 License & contributions
+## 📄 License & Citation
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
 
-Contributions are welcome—new message classifiers, better noise rules, UI integrations, and additional evaluation datasets.
+If you use this tool in academic work, please cite the associated IEEE paper.
 
 ---
 
 <div align="center">
 
-**⭐ Star this repo if FDS helps you build fairer developer evaluation systems! ⭐**
+**⭐ If this research tool helps your work, please star the repository! ⭐**
 
 </div>
