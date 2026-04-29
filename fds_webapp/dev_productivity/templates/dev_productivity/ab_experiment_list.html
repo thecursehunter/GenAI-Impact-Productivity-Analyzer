@@ -1,0 +1,72 @@
+{% extends 'dev_productivity/base.html' %}
+
+{% block title %}A/B Experiments — GIPA{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1 fw-bold">⚗️ A/B Experiments</h1>
+            <p class="text-muted mb-0">Browse all previously run productivity comparisons.</p>
+        </div>
+        <a href="{% url 'create_ab_experiment' %}" class="btn btn-primary d-flex align-items-center gap-2">
+            <i class="bi bi-plus-lg"></i> New Experiment
+        </a>
+    </div>
+
+    {% if experiments %}
+    <div class="card border-0 shadow-sm rounded-4 overflow-hidden">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="ps-4">Experiment Name</th>
+                        <th>Status</th>
+                        <th>Control Devs</th>
+                        <th>GenAI Devs</th>
+                        <th>Date Run</th>
+                        <th class="text-end pe-4">Action</th>
+                    </tr>
+                </thead>
+                <tbody class="border-top-0">
+                    {% for exp in experiments %}
+                    <tr>
+                        <td class="ps-4 fw-medium">
+                            {{ exp.name }}
+                            {% if exp.description %}
+                            <div class="text-muted small fw-normal">{{ exp.description|truncatechars:50 }}</div>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if exp.status == 'completed' %}
+                            <span class="badge bg-success bg-opacity-10 text-success px-2 py-1">Completed</span>
+                            {% elif exp.status == 'failed' %}
+                            <span class="badge bg-danger bg-opacity-10 text-danger px-2 py-1">Failed</span>
+                            {% else %}
+                            <span class="badge bg-warning bg-opacity-10 text-warning px-2 py-1">Running</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ exp.control_developer_count|default:"-" }}</td>
+                        <td>{{ exp.genai_developer_count|default:"-" }}</td>
+                        <td class="text-muted small">{{ exp.created_at|date:"M d, Y H:i" }}</td>
+                        <td class="text-end pe-4">
+                            <a href="{% url 'ab_experiment_detail' exp.id %}" class="btn btn-sm btn-outline-primary rounded-pill px-3">
+                                View Dashboard
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <div class="text-center py-5">
+        <div class="display-1 text-muted mb-3 opacity-25">⚗️</div>
+        <h4>No experiments found</h4>
+        <p class="text-muted">There are no A/B experiments recorded yet.</p>
+        <a href="{% url 'create_ab_experiment' %}" class="btn btn-primary mt-2">Start First Experiment</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

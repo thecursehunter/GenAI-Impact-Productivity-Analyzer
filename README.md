@@ -134,8 +134,8 @@ $$z = \text{clip}\left(\frac{x - \text{median}}{1.4826 \cdot \text{MAD}},\ -3,\ 
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/BellowAverage/ProgrammerProductivityMeasurement.git
-cd "ProgrammerProductivityMeasurement"
+git clone https://github.com/thecursehunter/GenAI-Impact-Productivity-Analyzer.git
+cd "GenAI Impact & Productivity Analyzer"
 
 # 2. Create and activate a virtual environment
 python -m venv .venv

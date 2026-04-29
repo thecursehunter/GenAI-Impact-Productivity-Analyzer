@@ -66,6 +66,7 @@ urlpatterns = [
     path('api/parameter-presets/', views.parameter_presets_api, name='parameter_presets_api'),
 
     # ── A/B Experiment routes (public — no authentication required) ──
+    path('ab-experiments/', views.ab_experiment_list, name='ab_experiment_list'),
     path('ab-experiment/new/', views.create_ab_experiment, name='create_ab_experiment'),
     path('ab-experiment/<int:experiment_id>/', views.ab_experiment_detail, name='ab_experiment_detail'),
     path('ab-experiment/<int:experiment_id>/data/', views.ab_experiment_data, name='ab_experiment_data'),

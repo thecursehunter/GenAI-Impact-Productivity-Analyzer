@@ -84,7 +84,8 @@
                     <a class="nav-link {% if 'create-analysis' in request.path %}active{% endif %}" href="{% url 'create_analysis' %}">➕ New Analysis</a>
                 {% endif %}
                 <a class="nav-link {% if 'analyses/' in request.path and 'my' not in request.path %}active{% endif %}" href="{% url 'analysis_list' %}">🌐 Public Analyses</a>
-                <a class="nav-link {% if 'ab-experiment' in request.path %}active{% endif %}" href="{% url 'create_ab_experiment' %}">⚗️ A/B Experiment</a>
+                <a class="nav-link {% if 'ab-experiments' in request.path %}active{% endif %}" href="{% url 'ab_experiment_list' %}">⚗️ A/B Experiments</a>
+                <a class="nav-link {% if 'ab-experiment/new' in request.path %}active{% endif %}" href="{% url 'create_ab_experiment' %}">⚗️ New A/B Experiment</a>
             </nav>
             {% if user.is_authenticated %}
             <div class="nav-section">Account</div>

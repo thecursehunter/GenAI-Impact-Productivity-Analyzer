@@ -108,6 +108,10 @@ class ABExperimentService:
         # ── Step 1: Preprocessing ──
         processor = DataProcessor(config)
         processed_df = processor.process_data(csv_path)   # takes file path
+        
+        # Ensure dates are properly parsed for FDS math (prevents string subtraction errors)
+        if 'commit_ts_utc' in processed_df.columns:
+            processed_df['commit_ts_utc'] = pd.to_datetime(processed_df['commit_ts_utc'])
 
         # ── Step 2: Developer Effort ──
         effort_calc = DeveloperEffortCalculator(config)

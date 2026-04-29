@@ -854,6 +854,13 @@ def parameter_presets_api(request):
 
 # ===================== A/B Experiment Views (Public — no auth required) =====================
 
+def ab_experiment_list(request):
+    """Public list of all A/B Experiments."""
+    experiments = ABExperiment.objects.all().order_by('-created_at')
+    return render(request, 'dev_productivity/ab_experiment_list.html', {
+        'experiments': experiments
+    })
+
 def create_ab_experiment(request):
     """Upload two CSVs and start an A/B experiment — no login needed."""
     if request.method == 'POST':
